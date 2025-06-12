@@ -25,7 +25,7 @@ The project is divided into two main components: the `server_kit` for setting up
 
 ```
 .
-├── server_kit
+├── server
 │   ├── main_setup.sh             # Main server orchestrator script
 │   ├── nfs_config.conf           # SERVER configuration file (EDIT THIS)
 │   └── modules                   # Server setup modules
@@ -35,13 +35,14 @@ The project is divided into two main components: the `server_kit` for setting up
 │       ├── 04_configure_time.sh
 │       └── 05_configure_firewall.sh
 │
-├── client_kit
+├── client
 │   ├── configure_client.sh       # Main client orchestrator script
 │   ├── client_config.conf        # CLIENT configuration file (EDIT THIS)
 │   └── modules                   # Client setup modules
 │       ├── 01_install_client_packages.sh
-│       ├── 02_setup_mounts.sh
-│       └── 03_run_tests.sh
+|       ├── 02_configure_time.sh 
+│       ├── 03_setup_mounts.sh
+│       └── 04_run_tests.sh
 │
 └── README.md                     # This documentation
 ```

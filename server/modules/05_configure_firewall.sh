@@ -1,51 +1,37 @@
 #!/bin/bash
-# /root/nfs_setup/modules/05_configure_firewall.sh
-
-# Exit on error
 set -euo pipefail
+
+# --- Logging Definitions ---
+C_RESET='\033[0m'; C_BLUE='\033[0;34m'; log_info() { echo -e "${C_BLUE}[INFO]${C_RESET} $1"; }
+log_success() { echo -e "${C_GREEN}[SUCCESS]${C_RESET} $1"; }
+
 # --- Load Configuration ---
-if [[ -z "$1" ]]; then
-    echo "FATAL: Configuration file path was not provided to this module." >&2
-    exit 1
-fi
+if [[ -z "$1" ]]; then exit 1; fi
 source "$1"
 
+log_info "Configuring firewall with UFW..."
 
-echo "--> Configuring firewall with UFW..."
+# Define required ports. NFSv4 only requires TCP port 2049.
+NFS_PORT="2049"
 
-# The 'ufw allow from' rules are more specific and secure
+# Allow from specified client networks
 for client_net in ${ALLOWED_CLIENTS}; do
-    echo "--> Allowing 'NFS' traffic from ${client_net}..."
-    ufw allow from "${client_net}" to any app NFS
+    log_info "Allowing NFS traffic (TCP port ${NFS_PORT}) from ${client_net}..."
+    # Using the port number directly is more robust than relying on the 'NFS' app profile.
+    ufw allow from "${client_net}" to any port "${NFS_PORT}" proto tcp comment "NFSv4 access"
 done
 
-echo "--> Allowing 'OpenSSH' traffic..."
+log_info "Allowing SSH traffic..."
 ufw allow OpenSSH
 
-# Check if UFW is active. If not, enable it with a prompt.
 if ! ufw status | grep -q "Status: active"; then
-    echo "==================================================================="
-    echo "Firewall (UFW) is about to be enabled."
-    echo "This will block all traffic except for SSH and the NFS rules just added."
-    echo "==================================================================="
-    # The '-f' option in the main script call will bypass this prompt
-    read -p "Type 'yes' to enable the firewall: " ENABLE_UFW
-    if [[ "${ENABLE_UFW}" == "yes" ]]; then
-        ufw --force enable
-        echo "--> Firewall has been enabled."
-    else
-        echo "--> Firewall not enabled. Please enable it manually with 'ufw enable'."
-    fi
+    log_info "Enabling firewall..."
+    ufw --force enable
 else
-    echo "--> UFW is already active. Reloading to apply new rules..."
+    log_info "Firewall is already active. Reloading rules..."
     ufw reload
 fi
 
-echo "--> Firewall status:"
+log_success "Firewall configured."
+log_info "--- Final Firewall Status ---"
 ufw status verbose
-
-echo "--> Firewall configuration complete."
-
-
-
-

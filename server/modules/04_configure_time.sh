@@ -3,6 +3,10 @@
 
 # Exit on error
 set -euo pipefail
+# This module currently doesn't use the config, but we load it for consistency.
+source "$1"
+
+
 
 echo "--> Configuring time synchronization with chrony..."
 
@@ -24,3 +28,8 @@ else
 fi
 
 echo "--> Time synchronization setup complete."
+
+
+#!/bin/bash
+set -euo pipefail
+

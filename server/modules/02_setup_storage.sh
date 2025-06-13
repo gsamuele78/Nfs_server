@@ -1,6 +1,13 @@
 #!/bin/bash
-# shellcheck disable=SC2128 # We are intentionally reading the array this way.
 set -euo pipefail
+
+# --- Load Configuration ---
+# The main script passes the config file path as the first argument.
+if [[ -z "$1" ]]; then
+    echo "FATAL: Configuration file path was not provided to this module." >&2
+    exit 1
+fi
+source "$1"
 
 echo "--> Validating NFS_SHARES configuration..."
 # --- PRE-FLIGHT CHECK: Ensure all LV_NAMEs are unique ---
@@ -9,7 +16,6 @@ for share_info in "${NFS_SHARES[@]}"; do
     IFS=';' read -r lv_name _ <<< "${share_info}"
     if [[ -n "${lv_names_seen[${lv_name}]}" ]]; then
         echo "ERROR: Duplicate LV_NAME '${lv_name}' found in nfs_config.conf." >&2
-        echo "       Every share must have a unique LV_NAME (the first field)." >&2
         exit 1
     fi
     lv_names_seen["${lv_name}"]=1
@@ -17,7 +23,6 @@ done
 echo "--> Configuration is valid."
 
 echo "--> Starting LVM and storage setup..."
-# Only prompt for confirmation if the Volume Group doesn't already exist.
 if ! vgdisplay "${VG_NAME}" &>/dev/null; then
     echo "==================================================================="
     echo "!!! WARNING: This script will destroy all data on ${STORAGE_DISK} !!!"
@@ -41,8 +46,6 @@ for share_info in "${NFS_SHARES[@]}"; do
     mount_path="${NFS_ROOT}/${mount_point_name}"
 
     echo "--> Processing share '${mount_point_name}' (LV: ${lv_name})"
-
-    # Create Logical Volume if it doesn't exist
     if ! lvdisplay "${lv_path}" &>/dev/null; then
         echo "    - Creating Logical Volume '${lv_name}' with size ${lv_size}..."
         lvcreate -n "${lv_name}" -L "${lv_size}" "${VG_NAME}"
@@ -53,7 +56,6 @@ for share_info in "${NFS_SHARES[@]}"; do
     fi
 
     mkdir -p "${mount_path}"
-    # Add to fstab if not already present, using robust UUID
     if ! grep -q -w "${mount_path}" /etc/fstab; then
         UUID=$(blkid -s UUID -o value "${lv_path}")
         echo "    - Adding entry to /etc/fstab..."
@@ -63,10 +65,4 @@ done
 
 echo "--> Mounting all filesystems defined in /etc/fstab..."
 mount -a
-
-echo "--> Verifying LVM and mount status:"
-vgs "${VG_NAME}"
-lvs "${VG_NAME}"
-df -h | grep "${NFS_ROOT}"
-
 echo "--> LVM and storage setup complete."

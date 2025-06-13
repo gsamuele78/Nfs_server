@@ -1,13 +1,12 @@
 #!/bin/bash
 # /root/nfs_setup/main_setup.sh
 
-# Ensure the script exits on any error
 set -euo pipefail
 
 # --- Sanity Checks ---
 if [[ $EUID -ne 0 ]]; then
-   echo "This script must be run as root."
-   exit 1
+    echo "This script must be run as root."
+    exit 1
 fi
 
 if [[ ! -f "nfs_config.conf" ]]; then
@@ -16,6 +15,7 @@ if [[ ! -f "nfs_config.conf" ]]; then
 fi
 
 # Load configuration
+# shellcheck source=./nfs_config.conf
 source "nfs_config.conf"
 export STORAGE_DISK VG_NAME NFS_SHARES NFS_DOMAIN ALLOWED_CLIENTS NFS_THREAD_COUNT
 
@@ -25,22 +25,31 @@ MODULE_DIR="${BASE_DIR}/modules"
 
 echo "### Starting NFS Server Setup ###"
 
+if [[ ${#NFS_SHARES[@]} -eq 0 ]]; then
+    cat <<'EOF'
+==================================================================
+!!! WARNING: No NFS shares are configured in nfs_config.conf. !!!
+------------------------------------------------------------------
+To create shares:
+1. Edit the NFS_SHARES array in nfs_config.conf
+   Example:
+   NFS_SHARES=(
+     "sssd_share;20G;sssd_share"
+     "public_share;5G;public"
+   )
+2. Re-run ./main_setup.sh
+==================================================================
+EOF
+fi
+
+# Ensure modules are executable
+find "${MODULE_DIR}" -type f -name "*.sh" -exec chmod +x {} \;
+
 # Execute modules in order
 for module in "${MODULE_DIR}"/*.sh; do
     if [[ -f "${module}" && -x "${module}" ]]; then
         echo "--- Executing module: $(basename "${module}") ---"
         "${module}"
         echo "--- Module $(basename "${module}") completed successfully. ---"
-    else
-        # Make modules executable if they aren't
-        echo "--- Setting executable permission and running module: $(basename "${module}") ---"
-        chmod +x "${module}"
-        "${module}"
-        echo "--- Module $(basename "${module}") completed successfully. ---"
     fi
 done
-
-echo "### NFS Server Setup Completed Successfully! ###"
-echo
-echo "The server is now configured. Please review the output for any important notices."
-echo "You can test the setup from a client machine using the 'testing/test_from_client.sh' script."

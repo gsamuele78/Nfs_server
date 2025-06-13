@@ -34,7 +34,6 @@ fi
 for share_info in "${NFS_SHARES[@]}"; do
     IFS=';' read -r _ _ mount_point_name share_type <<< "${share_info}"
     mount_path="${NFS_ROOT}/${mount_point_name}"
-    # CRITICAL FIX: The variable was misspelled here.
     export_path="/export/${mount_point_name}"
 
     mkdir -p "${export_path}"
@@ -43,8 +42,7 @@ for share_info in "${NFS_SHARES[@]}"; do
     fi
 
     log_info "Adding export for '${mount_point_name}' with type '${share_type}'"
-    if [[ "${share_type}" == "sssd" ]];
-    then
+    if [[ "${share_type}" == "sssd" ]]; then
         log_info "  - Applying 'sec=sys' for SSSD-aware access."
         echo "${export_path} ${ALLOWED_CLIENTS}(rw,sync,no_subtree_check,sec=sys)" >> "${EXPORTS_FILE}"
         chown root:root "${mount_path}"; chmod 1777 "${mount_path}"
@@ -57,9 +55,13 @@ for share_info in "${NFS_SHARES[@]}"; do
     fi
 done
 
+log_info "Reloading systemd manager configuration to recognize new fstab entries..."
+systemctl daemon-reload
+
 log_info "Applying all mount points and NFS exports..."
 mount -a
 exportfs -ra
+
 log_info "Restarting and enabling NFS services..."
 systemctl restart nfs-kernel-server
 systemctl enable nfs-kernel-server

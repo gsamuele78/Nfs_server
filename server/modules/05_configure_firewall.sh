@@ -3,6 +3,13 @@
 
 # Exit on error
 set -euo pipefail
+# --- Load Configuration ---
+if [[ -z "$1" ]]; then
+    echo "FATAL: Configuration file path was not provided to this module." >&2
+    exit 1
+fi
+source "$1"
+
 
 echo "--> Configuring firewall with UFW..."
 
@@ -24,7 +31,7 @@ if ! ufw status | grep -q "Status: active"; then
     # The '-f' option in the main script call will bypass this prompt
     read -p "Type 'yes' to enable the firewall: " ENABLE_UFW
     if [[ "${ENABLE_UFW}" == "yes" ]]; then
-        ufw enable
+        ufw --force enable
         echo "--> Firewall has been enabled."
     else
         echo "--> Firewall not enabled. Please enable it manually with 'ufw enable'."
@@ -38,3 +45,7 @@ echo "--> Firewall status:"
 ufw status verbose
 
 echo "--> Firewall configuration complete."
+
+
+
+

@@ -13,10 +13,9 @@ track_file() { echo "$1" >> "$MANIFEST_FILE"; }
 if [[ -z "$1" ]]; then log_fatal "Config file path not provided."; fi
 CONFIG_FILE="$1"
 source "${CONFIG_FILE}"
-# The manifest file is the second argument
 MANIFEST_FILE="$2"
 
-# --- Pre-flight Checks & LVM Setup ---
+# --- Pre-flight Checks ---
 log_info "Validating storage configuration..."
 declare -A lv_names_seen
 for share_info in "${NFS_SHARES[@]}"; do
@@ -28,11 +27,29 @@ for share_info in "${NFS_SHARES[@]}"; do
 done
 log_success "Configuration is valid."
 
+# --- LVM Setup ---
+log_info "Starting LVM and storage setup..."
 if ! vgdisplay "${VG_NAME}" &>/dev/null; then
+    log_warn "Volume Group '${VG_NAME}' not found. It must be created."
+    echo -e "${C_YELLOW}========================= FINAL WARNING =========================${C_RESET}"
+    echo -e "This script is about to perform the following IRREVERSIBLE actions:"
+    echo -e "  1. Erase all data and partitions on disk: ${C_RED}${STORAGE_DISK}${C_RESET}"
+    echo -e "  2. Create a new LVM Volume Group named:  ${C_RED}${VG_NAME}${C_RESET}"
+    echo -e "${C_YELLOW}=================================================================${C_RESET}"
     read -p "Type 'CONFIRM' to proceed, or any other key to abort: " CONFIRMATION
     if [[ "${CONFIRMATION}" != "CONFIRM" ]]; then echo "Aborted by user."; exit 1; fi
-    wipefs -a "${STORAGE_DISK}" && pvcreate -f "${STORAGE_DISK}" && vgcreate "${VG_NAME}" "${STORAGE_DISK}"
+
+    log_info "Wiping existing signatures from ${STORAGE_DISK}..."
+    wipefs -a "${STORAGE_DISK}"
+    log_info "Creating LVM Physical Volume..."
+    pvcreate -f "${STORAGE_DISK}"
+    log_info "Creating Volume Group '${VG_NAME}'..."
+    vgcreate "${VG_NAME}" "${STORAGE_DISK}"
+    log_success "Volume Group '${VG_NAME}' created successfully."
+else
+    log_info "Volume Group '${VG_NAME}' already exists. Skipping creation."
 fi
+
 NFS_ROOT="/srv/nfs"; mkdir -p "${NFS_ROOT}"; chmod 755 "${NFS_ROOT}"
 
 # --- Share Creation Loop ---
@@ -43,18 +60,23 @@ for share_info in "${NFS_SHARES[@]}"; do
 
     log_info "Processing share '${mount_point_name}' (LV: ${lv_name})"
     if ! lvdisplay "${lv_path}" &>/dev/null; then
+        log_info "  - Creating Logical Volume '${lv_name}' (${lv_size})..."
         lvcreate -n "${lv_name}" -L "${lv_size}" "${VG_NAME}"
+        log_info "  - Formatting with ext4 filesystem..."
         mkfs.ext4 "${lv_path}"
+    else
+        log_info "  - Logical Volume '${lv_name}' already exists. Skipping."
     fi
 
     mkdir -p "${mount_path}"
     if ! grep -q -w "${mount_path}" /etc/fstab; then
         UUID=$(blkid -s UUID -o value "${lv_path}")
-        log_info "  - Adding entry to /etc/fstab for ${mount_path}..."
+        log_info "  - Adding entry to /etc/fstab..."
         echo "UUID=${UUID} ${mount_path} ext4 defaults 0 0" >> /etc/fstab
-        # Add the file to our report manifest
         track_file "/etc/fstab"
+    else
+        log_info "  - fstab entry already exists. Skipping."
     fi
 done
-log_info "Mounting all filesystems defined in /etc/fstab..."
+log_info "Mounting all filesystems..."
 mount -a

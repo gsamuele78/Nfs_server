@@ -1,92 +1,80 @@
 #!/bin/bash
-# /root/nfs_setup/modules/03_configure_nfs.sh
+# /root/nfs_setup/modules/02_setup_storage.sh
 
 set -euo pipefail
 
-echo "--> Configuring NFS server..."
+echo "--> Starting LVM and storage setup..."
 
-# Step 1: Configure /etc/default/nfs-kernel-server for performance
-echo "--> Tuning NFS thread count to ${NFS_THREAD_COUNT}..."
-sed -i "s/^RPCNFSDCOUNT=.*/RPCNFSDCOUNT=${NFS_THREAD_COUNT}/" /etc/default/nfs-kernel-server
-
-# Step 2: Configure /etc/idmapd.conf for SSSD awareness
-echo "--> Configuring domain in /etc/idmapd.conf for SSSD integration..."
-sed -i "s/^#Domain = .*/Domain = ${NFS_DOMAIN}/" /etc/idmapd.conf
-sed -i "s/^#Nobody-User = .*/Nobody-User = nfsnobody/" /etc/idmapd.conf
-sed -i "s/^#Nobody-Group = .*/Nobody-Group = nfsnobody/" /etc/idmapd.conf
-
-# Step 3: Create /etc/exports file
-echo "--> Generating /etc/exports configuration..."
+# Create the main NFS root directory if it doesn't exist
 NFS_ROOT="/srv/nfs"
-EXPORTS_FILE="/etc/exports"
-
-# Create a bind mount for the export root. This is a best practice for NFSv4.
-if ! grep -q -F "${NFS_ROOT} /export" /etc/fstab; then
-    echo "--> Setting up NFSv4 pseudo-filesystem root at /export..."
-    mkdir -p /export
-    echo "${NFS_ROOT} /export none bind 0 0" >> /etc/fstab
-    mount -a
-fi
+mkdir -p "${NFS_ROOT}"
+chmod 755 "${NFS_ROOT}"
 
 if [[ ${#NFS_SHARES[@]} -eq 0 ]]; then
     cat <<'EOF'
 ==================================================================
-No NFS shares configured. Skipping NFS export configuration.
-To add shares, edit nfs_config.conf and set NFS_SHARES.
+!!! WARNING: No NFS shares are configured in nfs_config.conf. !!!
+------------------------------------------------------------------
+To create shares:
+1. Edit the NFS_SHARES array in nfs_config.conf
+   Example:
+   NFS_SHARES=(
+     "sssd_share;20G;sssd_share"
+     "public_share;5G;public"
+   )
+2. Re-run ./main_setup.sh
 ==================================================================
 EOF
     exit 0
 fi
 
-{
-    echo "# /etc/exports - configuration for NFS server"
-    echo "# This file is managed by the nfs_setup script."
-    echo ""
-    echo "# Define the NFSv4 pseudo-filesystem root"
-    echo "/export ${ALLOWED_CLIENTS}(ro,sync,no_subtree_check,fsid=0)"
-    echo ""
-} > "${EXPORTS_FILE}"
+# Disk and VG setup (assume disk is already checked for safety in main script)
+if ! pvs "${STORAGE_DISK}" &>/dev/null; then
+    echo "==================================================================="
+    echo "!!! WARNING !!!"
+    echo "This script is about to partition and format the disk: ${STORAGE_DISK}"
+    echo "ALL DATA ON THIS DISK WILL BE DESTROYED."
+    echo "==================================================================="
+    read -rp "Type 'CONFIRM' to proceed, or any other key to abort: " confirm
+    if [[ "${confirm}" != "CONFIRM" ]]; then
+        echo "Aborted by user."
+        exit 1
+    fi
+    echo "--> Creating LVM Physical Volume on ${STORAGE_DISK}..."
+    pvcreate -f "${STORAGE_DISK}"
+    echo "--> Creating Volume Group '${VG_NAME}'..."
+    vgcreate "${VG_NAME}" "${STORAGE_DISK}"
+fi
 
-# Add entries for each share
+mount -a
+
+# Loop through the shares defined in the config file
 for share_info in "${NFS_SHARES[@]}"; do
     IFS=';' read -r lv_name lv_size mount_point_name <<<"${share_info}"
+    lv_path="/dev/${VG_NAME}/${lv_name}"
     mount_path="${NFS_ROOT}/${mount_point_name}"
-    export_path="/export/${mount_point_name}"
 
-    # Create the bind mount for the individual share
-    if ! grep -q -F "${mount_path} ${export_path}" /etc/fstab; then
-        mkdir -p "${export_path}"
-        echo "${mount_path} ${export_path} none bind 0 0" >> /etc/fstab
-    fi
+    echo "--> Processing share: ${lv_name}"
 
-    echo "--> Adding export entry for ${mount_point_name}..."
-
-    # Example logic: if the share name contains 'sssd', treat it as SSSD-aware.
-    if [[ "${mount_point_name}" == *"sssd"* ]]; then
-        echo "    - Configuring as SSSD-aware share (sec=sys)."
-        echo "${export_path} ${ALLOWED_CLIENTS}(rw,sync,no_subtree_check,sec=sys)" >> "${EXPORTS_FILE}"
-        chown root:root "${mount_path}"
-        chmod 1777 "${mount_path}" # Sticky bit allows users to manage their own files
+    if lvdisplay "${lv_path}" &>/dev/null; then
+        echo "    - Logical Volume '${lv_name}' already exists. Skipping creation."
     else
-        echo "    - Configuring as public, user-squashing share."
-        if ! id "nfsnobody" &>/dev/null; then
-            useradd -r -s /usr/sbin/nologin nfsnobody
-        fi
-        ANON_UID=$(id -u nfsnobody)
-        ANON_GID=$(id -g nfsnobody)
-        echo "${export_path} ${ALLOWED_CLIENTS}(rw,sync,no_subtree_check,all_squash,anonuid=${ANON_UID},anongid=${ANON_GID})" >> "${EXPORTS_FILE}"
-        chown nfsnobody:nfsnobody "${mount_path}"
-        chmod 770 "${mount_path}"
+        echo "    - Creating Logical Volume '${lv_name}' with size ${lv_size}..."
+        lvcreate -n "${lv_name}" -L "${lv_size}" "${VG_NAME}"
+        mkfs.ext4 "${lv_path}"
     fi
+
+    mkdir -p "${mount_path}"
+    if ! grep -q -F "${lv_path} ${mount_path}" /etc/fstab; then
+        echo "${lv_path} ${mount_path} ext4 defaults 0 2" >> /etc/fstab
+    fi
+    mount "${mount_path}"
 done
 
-mount -a # Ensure all new bind mounts are active
+echo "--> Setting base ownership for NFS root..."
+chown root:root "${NFS_ROOT}"
 
-echo "--> Applying new export configuration..."
-exportfs -ra
+echo "--> Verifying mounts:"
+df -h | grep "${NFS_ROOT}"
 
-echo "--> Restarting and enabling NFS services..."
-systemctl restart nfs-kernel-server
-systemctl enable nfs-kernel-server
-
-echo "--> NFS configuration complete."
+echo "--> LVM and storage setup complete."

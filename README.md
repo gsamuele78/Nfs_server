@@ -2,7 +2,7 @@
 
 ![Shell Logo](https://img.shields.io/badge/Shell-Bash-blue)
 ![OS](https://img.shields.io/badge/OS-Ubuntu%2024.04%20LTS-orange)
-![License](https://img.shields.io/badge/License-MIT-green)
+![License](https://img.shields.io/badge/License-GPL3.0-green)
 ![Compliance](https://img.shields.io/badge/ShellCheck-Compliant-brightgreen)
 
 This repository provides a robust, modular, and automated set of scripts for deploying a high-performance NFSv4 server and provisioning NFS clients on Ubuntu 24.04 LTS.
@@ -217,4 +217,4 @@ Thanks to LVM, you can grow a share without downtime.
 
 ## License
 
-This project is licensed under the MIT License. See the `LICENSE` file for details.
+This project is licensed under the GPL3.0 License. See the `LICENSE` file for details.

@@ -217,4 +217,4 @@ Thanks to LVM, you can grow a share without downtime.
 
 ## License
 
-This project is licensed under the GPL3.0 License. See the ([`LICENSE`](https://github.com/gsamuele78/Nfs_server/tree/main?tab=GPL-3.0-1-ov-file)) file for details.
+This project is licensed under the GPL3.0 License. See the ([`LICENSE`]((https://github.com/gsamuele78/Nfs_server/blob/main/LICENSE)) file for details.

@@ -14,69 +14,43 @@ if [[ -z "$1" ]]; then log_fatal "Config file path not provided."; fi
 source "$1"
 MANIFEST_FILE="$2"
 
-# --- 1. Port Check (Core NFS Port) ---
-log_info "Checking core NFS connectivity to ${NFS_SERVER_IP} on port 2049..."
-if ! nc -z -v -w5 "${NFS_SERVER_IP}" 2049 &>/dev/null; then
-    log_fatal "Cannot connect to ${NFS_SERVER_IP} on TCP port 2049. Please check server firewall and ensure NFS service is running."
-else
-    log_success "Core NFS port 2049 is open and reachable."
-fi
+# --- 1. Port Check & Discovery ---
+log_info "Checking connectivity and discovering shares from ${NFS_SERVER_IP}..."
+# The showmount command uses RPC, which is a good test for the hardened ports.
+available_shares=($(showmount -e "${NFS_SERVER_IP}" | awk '{print $1}' | grep '^/export/' | sed 's|^/export/||' || true))
 
-# --- 2. Mode Selection ---
-shares_to_mount=()
+if [[ ${#available_shares[@]} -eq 0 ]]; then
+    log_fatal "Could not discover any mountable shares. Please check the server's firewall and ensure the RPC hardening script has been run."
+fi
+log_success "Successfully discovered ${#available_shares[@]} share(s)."
+
+# --- 2. Interactive Selection (THE NEW, FIXED MENU) ---
 echo
-log_info "How would you like to specify the shares to mount?"
-echo "  1) Manually Enter Share Names (Most Secure - No server changes needed)"
-echo "  2) Temporarily Enable Share Discovery (Requires temporary firewall changes on the server)"
-read -p "Please choose an option [1]: " mode_choice
-mode_choice=${mode_choice:-1} # Default to 1 if user just hits Enter
-
-if [[ "${mode_choice}" == "1" ]]; then
-    # --- Manual Mode ---
-    log_info "Entering Manual Mode."
-    while true; do
-        read -p "Enter the exact name of a share to mount (or press Enter to finish): " share_name
-        if [[ -z "${share_name}" ]]; then
-            break
-        fi
-        shares_to_mount+=("${share_name}")
-        log_success "Added '${share_name}' to the list."
+log_info "The following shares are available to mount:"
+PS3=$'\n'"Enter the number of a share to add (or 'done' to finish): "
+shares_to_mount=()
+while true; do
+    select share in "${available_shares[@]}" "Done"; do
+        case "${share}" in
+            "Done")
+                log_info "Finished selection."
+                break 2 # Break out of both the 'select' and 'while' loops
+                ;;
+            "") # Invalid input
+                log_warn "Invalid selection. Please try again."
+                ;;
+            *) # Valid share selected
+                if [[ " ${shares_to_mount[*]} " =~ " ${share} " ]]; then
+                    log_warn "'${share}' has already been selected."
+                else
+                    shares_to_mount+=("${share}")
+                    log_success "Added '${share}'. Current selection: ${C_YELLOW}${shares_to_mount[*]}${C_RESET}"
+                fi
+                break # Break out of the inner 'select' loop to re-display the menu
+                ;;
+        esac
     done
-
-else
-    # --- Discovery Mode ---
-    CLIENT_IP=$(hostname -I | awk '{print $1}')
-    RPCBIND_PORT=111
-    log_warn "To enable share discovery, you must TEMPORARILY open port ${RPCBIND_PORT} on the NFS SERVER."
-    echo -e "${C_YELLOW}====================== On the NFS SERVER, run this command ======================${C_RESET}"
-    echo -e "${C_GREEN}sudo ufw allow from ${CLIENT_IP} to any port ${RPCBIND_PORT} proto tcp comment 'Temp NFS Discovery'${C_RESET}"
-    echo -e "${C_YELLOW}==================================================================================${C_RESET}"
-    read -p "Press [Enter] after running the command on the server."
-
-    log_info "Discovering available shares on ${NFS_SERVER_IP}..."
-    available_shares=($(showmount -e "${NFS_SERVER_IP}" | awk '{print $1}' | grep '^/export/' | sed 's|^/export/||' || true))
-
-    if [[ ${#available_shares[@]} -eq 0 ]]; then
-        log_fatal "Could not discover any shares. Please verify the firewall rule was added and the server is exporting shares."
-    fi
-
-    log_info "Please select the shares you wish to mount from the list below."
-    PS3="Enter a number (or 'q' to quit): "
-    select share in "${available_shares[@]}"; do
-        if [[ "${REPLY}" == "q" || "${REPLY}" == "Q" ]]; then break; fi
-        if [[ -n "${share}" ]]; then
-            shares_to_mount+=("${share}")
-            log_success "Selected: ${share}"
-        else
-            log_warn "Invalid selection."
-        fi
-    done
-    
-    echo -e "${C_YELLOW}================== To restore security, run this command on the SERVER =================${C_RESET}"
-    echo -e "${C_GREEN}sudo ufw delete allow from ${CLIENT_IP} to any port ${RPCBIND_PORT} comment 'Temp NFS Discovery'${C_RESET}"
-    echo -e "${C_YELLOW}==================================================================================${C_RESET}"
-    read -p "Press [Enter] to continue the setup."
-fi
+done
 
 if [[ ${#shares_to_mount[@]} -eq 0 ]]; then
     log_info "No shares were selected. Exiting."
@@ -84,7 +58,7 @@ if [[ ${#shares_to_mount[@]} -eq 0 ]]; then
 fi
 
 # --- 3. Configure and Mount ---
-log_info "Configuring the selected share(s)..."
+log_info "Configuring the ${#shares_to_mount[@]} selected share(s)..."
 mkdir -p "${MOUNT_POINT_BASE}"
 
 for share in "${shares_to_mount[@]}"; do
@@ -93,7 +67,6 @@ for share in "${shares_to_mount[@]}"; do
     mkdir -p "${local_mount_path}"
 
     if ! grep -q -w "${local_mount_path}" /etc/fstab; then
-        log_info "Adding fstab entry for '${share}'..."
         fstab_entry="${remote_mount_path} ${local_mount_path} nfs4 defaults,auto,nofail,_netdev 0 0"
         echo "${fstab_entry}" >> /etc/fstab
         track_file "/etc/fstab"
@@ -105,10 +78,9 @@ systemctl daemon-reload
 mount -a -t nfs4
 
 # --- 4. Final Test ---
-log_info "Performing final check on mounted shares..."
+log_info "Performing final check..."
 for share in "${shares_to_mount[@]}"; do
-    local_mount_path="${MOUNT_POINT_BASE}/${share}"
-    if mountpoint -q "${local_mount_path}"; then
+    if mountpoint -q "${MOUNT_POINT_BASE}/${share}"; then
         log_success "Share '${share}' is successfully mounted."
     else
         log_warn "Share '${share}' FAILED to mount."

@@ -1,12 +1,12 @@
 #!/bin/bash
-# /root/client_setup/modules/01_install_client_packages.sh
 set -euo pipefail
 
-echo "--> Updating package lists..."
-apt-get update
+C_BLUE='\033[0;34m'; C_RESET='\033[0m'
+log_info() { echo -e "${C_BLUE}[INFO]${C_RESET} $1"; }
 
-echo "--> Installing client packages (nfs-common, chrony)..."
-# nfs-common provides NFS tools, chrony provides time synchronization
-apt-get install -y nfs-common chrony
+log_info "Updating package lists..."
+apt-get update >/dev/null
 
-echo "--> Package installation complete."
+log_info "Installing client packages (nfs-common, chrony, netcat)..."
+# netcat-openbsd provides the 'nc' tool for port checking
+apt-get install -y nfs-common chrony netcat-openbsd

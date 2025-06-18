@@ -1,4 +1,6 @@
 #!/bin/bash
+#run one time using this command
+#sudo ./modules/06_harden_rpc_ports.sh ./nfs_config.conf /tmp/manifest.tmp
 set -euo pipefail
 
 # --- Logging & Tracking ---

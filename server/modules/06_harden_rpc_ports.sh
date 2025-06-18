@@ -8,39 +8,35 @@ log_success() { echo -e "${C_GREEN}[SUCCESS]${C_RESET} $1"; }
 track_file() { echo "$1" >> "$MANIFEST_FILE"; }
 
 # --- Load Configuration ---
-# This module is standalone but can be integrated if needed. We get the config path.
 source "$1"
 MANIFEST_FILE="$2"
 
 # --- Static Port Definitions ---
-# These are standard, non-conflicting high ports chosen for this purpose.
 STATD_PORT=32765
 MOUNTD_PORT=32767
 NLOCKMGR_PORT=32768
+RPCBIND_PORT=111
 
 log_info "Hardening NFS server by setting static ports for legacy RPC services..."
 
-# --- Configure /etc/default/nfs-common ---
-log_info "Configuring NEED_STATD=yes in /etc/default/nfs-common..."
+# Configure /etc/default/nfs-common & nfs-kernel-server
+log_info "Configuring static ports in /etc/default/* files..."
 sed -i 's/^NEED_STATD=.*/NEED_STATD=yes/' /etc/default/nfs-common
-log_info "Setting static port for statd: ${STATD_PORT}..."
 sed -i "s/^STATDOPTS=.*/STATDOPTS=\"--port ${STATD_PORT} --outgoing-port ${STATD_PORT}\"/" /etc/default/nfs-common
-track_file "/etc/default/nfs-common"
-
-# --- Configure /etc/default/nfs-kernel-server ---
-log_info "Setting static port for mountd: ${MOUNTD_PORT}..."
 sed -i "s/^RPCMOUNTDOPTS=.*/RPCMOUNTDOPTS=\"-p ${MOUNTD_PORT}\"/" /etc/default/nfs-kernel-server
+track_file "/etc/default/nfs-common"
 track_file "/etc/default/nfs-kernel-server"
 
-# --- Configure /etc/modprobe.d/lockd.conf ---
+# Configure /etc/modprobe.d/lockd.conf
 log_info "Setting static port for nlockmgr (lockd): ${NLOCKMGR_PORT}..."
 echo "options lockd nlm_tcpport=${NLOCKMGR_PORT} nlm_udpport=${NLOCKMGR_PORT}" > /etc/modprobe.d/lockd.conf
 track_file "/etc/modprobe.d/lockd.conf"
 
-# --- Update Firewall ---
-log_info "Updating UFW firewall rules for the new static ports..."
+# --- Update Firewall (THE CRITICAL FIX IS HERE) ---
+log_info "Updating UFW firewall rules for new static ports (TCP & UDP)..."
 for client_net in ${ALLOWED_CLIENTS}; do
-    ufw allow from "${client_net}" to any port ${RPCBIND_PORT:=111} comment "NFS RPC"
+    # By not specifying 'proto', UFW applies the rule to BOTH TCP and UDP.
+    ufw allow from "${client_net}" to any port ${RPCBIND_PORT} comment "NFS RPC"
     ufw allow from "${client_net}" to any port ${STATD_PORT} comment "NFS statd"
     ufw allow from "${client_net}" to any port ${MOUNTD_PORT} comment "NFS mountd"
     ufw allow from "${client_net}" to any port ${NLOCKMGR_PORT} comment "NFS lockmgr"
@@ -49,6 +45,12 @@ ufw reload
 
 log_info "Applying changes requires a service restart..."
 systemctl restart nfs-kernel-server
+systemctl restart rpcbind
 
 log_success "NFS RPC services have been hardened to use static ports."
-log_info "The firewall has been updated to allow access to these new ports."
+echo -e "${C_YELLOW}=========================== Verification ===========================${C_RESET}"
+echo "You can verify the ports are correctly registered by running this"
+echo "command from a client machine:"
+echo -e "${C_GREEN}rpcinfo -p ${NFS_SERVER_IP}${C_RESET}"
+echo "Look for 'mountd', 'nlockmgr', and 'status' using the new ports."
+echo -e "${C_YELLOW}==================================================================${C_RESET}"

@@ -7,9 +7,12 @@ log_info() { echo -e "${C_BLUE}[INFO]${C_RESET} $1"; }
 log_success() { echo -e "${C_GREEN}[SUCCESS]${C_RESET} $1"; }
 log_warn() { echo -e "${C_YELLOW}[WARNING]${C_RESET} $1"; }
 log_fatal() { echo -e "${C_RED}[ERROR]${C_RESET} $1" >&2; exit 1; }
+track_file() { echo "$1" >> "$MANIFEST_FILE"; }
 
 source "$1" # Load Configuration
+MANIFEST_FILE="$2"
 
+# --- Enlarge, Shrink, Move Functions 
 # =========================== Function: Enlarge a Share ============================
 enlarge_share() {
     log_info "Select a share to enlarge:"
@@ -112,12 +115,90 @@ move_share() {
     fi
 }
 
+# =========================== Function: Remove a Share (DESTRUCTIVE) =================
+remove_share() {
+    echo -e "${C_RED}============================= DANGER ============================="
+    log_warn "This operation is IRREVERSIBLE and will PERMANENTLY DESTROY DATA."
+    log_warn "You are about to completely remove an NFS share and its underlying storage."
+    echo -e "${C_RED}==================================================================${C_RESET}"
+    
+    log_info "Select a share to REMOVE:"
+    mapfile -t lvs_list < <(lvs --noheadings -o lv_name "${VG_NAME}" | awk '{print $1}')
+    if [[ ${#lvs_list[@]} -eq 0 ]]; then log_fatal "No shares found to remove."; fi
+    
+    select lv_name in "${lvs_list[@]}"; do
+        if [[ -n "$lv_name" ]]; then break; else log_warn "Invalid selection."; fi
+    done
+    
+    local lv_path="/dev/${VG_NAME}/${lv_name}"
+    local mount_point; mount_point=$(findmnt -n -S "${lv_path}" -o TARGET)
+    if [[ -z "$mount_point" ]]; then log_fatal "Could not find a mount point for the selected LV. Cannot proceed safely."; fi
+    local export_path="/export/$(basename "${mount_point}")"
+
+    echo -e "${C_YELLOW}------------------- DESTRUCTION SUMMARY ------------------${C_RESET}"
+    echo "  - NFS Export:    ${export_path}"
+    echo "  - Mount Point:   ${mount_point}"
+    echo "  - fstab Entry:   For ${mount_point}"
+    echo "  - LVM Volume:    ${lv_path}"
+    echo "  - ALL DATA on this share will be lost."
+    echo -e "${C_YELLOW}----------------------------------------------------------${C_RESET}"
+    read -p "To confirm, please type 'DESTROY THIS SHARE': " confirm
+    if [[ "${confirm}" != "DESTROY THIS SHARE" ]]; then log_info "Operation cancelled."; return; fi
+
+    # --- The Safe Removal Procedure ---
+    log_info "Step 1/5: Removing NFS export entry from /etc/exports..."
+    sed -i "\#${export_path}#d" /etc/exports
+    track_file "/etc/exports"
+    exportfs -ra
+
+    log_info "Step 2/5: Unmounting filesystem at ${mount_point}..."
+    if ! umount "${mount_point}"; then
+        log_fatal "Failed to unmount ${mount_point}. It may be in use. Please resolve manually and try again."
+    fi
+
+    log_info "Step 3/5: Removing fstab entry..."
+    sed -i "\#${mount_point}#d" /etc/fstab
+    track_file "/etc/fstab"
+
+    log_info "Step 4/5: Removing Logical Volume ${lv_name}..."
+    lvremove -f "${lv_path}"
+    
+    log_info "Step 5/5: Cleaning up empty mount point directory..."
+    rmdir "${mount_point}"
+
+    log_success "Share '${lv_name}' and all its data have been permanently removed."
+    
+    # --- Conditional VG Cleanup ---
+    if [[ $(lvs --noheadings "${VG_NAME}" 2>/dev/null | wc -l) -eq 0 ]]; then
+        log_warn "This was the LAST share in the Volume Group '${VG_NAME}'."
+        read -p "Do you want to also remove the now-empty Volume Group? (y/N): " confirm_vg
+        if [[ "${confirm_vg,,}" == "y" ]]; then
+            local pvs_in_vg
+            pvs_in_vg=$(pvs --noheadings -o pv_name,vg_name | grep "${VG_NAME}" | awk '{print $1}')
+            
+            log_warn "This will remove VG '${VG_NAME}' and wipe LVM metadata from the underlying disk(s)."
+            read -p "To confirm, type 'WIPE VOLUME GROUP': " confirm_wipe
+            if [[ "${confirm_wipe}" == "WIPE VOLUME GROUP" ]]; then
+                log_info "Removing Volume Group '${VG_NAME}'..."
+                vgremove -f "${VG_NAME}"
+                log_info "Wiping LVM metadata from physical disk(s)..."
+                pvremove -f ${pvs_in_vg}
+                log_success "Volume Group '${VG_NAME}' and PV metadata have been wiped."
+            else
+                log_info "Volume Group cleanup cancelled."
+            fi
+        fi
+    fi
+}
+
+
 # =========================== Main Management Menu ==============================
 while true; do
     echo; echo -e "${C_YELLOW}=============== Storage Management Module ===============${C_RESET}"
     echo "  1) Enlarge a Share (Safe, No Downtime)"
     echo "  2) Shrink a Share (Risky, Requires Downtime)"
     echo "  3) Move a Share to a New Disk (Safe, No Downtime)"
+    echo -e "  4) ${C_RED}Remove a Share (DESTRUCTIVE)${C_RESET}"
     echo "  Q) Return to Main Menu"
     echo -e "${C_YELLOW}=======================================================${C_RESET}"
     read -p "Enter your choice: " choice
@@ -126,6 +207,7 @@ while true; do
         1) enlarge_share ;;
         2) shrink_share ;;
         3) move_share ;;
+        4) remove_share ;;
         [qQ]) log_info "Exiting Storage Management."; break ;;
         *) log_warn "Invalid option." ;;
     esac

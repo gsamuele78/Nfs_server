@@ -69,7 +69,7 @@ else
     while true; do
         echo
         echo -e "${C_GREEN}====================== NFS Management Menu ======================${C_RESET}"
-        echo "  1) Manage Share Storage (Enlarge/Shrink/Move)"
+        echo "  1) Manage Share Storage (Enlarge/Shrink/Move/Remove)"
         echo "  2) Re-apply Server Configuration (Firewall, Exports)"
         echo "  Q) Quit and Show Report"
         echo -e "${C_GREEN}===================================================================${C_RESET}"
